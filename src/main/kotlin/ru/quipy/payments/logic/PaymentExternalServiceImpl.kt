@@ -6,6 +6,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
+import ru.quipy.common.utils.RateLimiter
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
@@ -25,11 +28,13 @@ class PaymentExternalSystemAdapterImpl(
         val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
     }
-
+    
+    
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
+    private var rateLimiter : RateLimiter = SlidingWindowRateLimiter(properties.rateLimitPerSec.toLong(), Duration.ofSeconds(1))
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder().build()
@@ -40,6 +45,9 @@ class PaymentExternalSystemAdapterImpl(
         val transactionId = UUID.randomUUID()
         logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
 
+        while (rateLimiter.tick() == false){
+            Thread.sleep(1000)
+        }
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         paymentESService.update(paymentId) {
