@@ -46,7 +46,7 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
 
         while (rateLimiter.tick() == false){
-            Thread.sleep(1000)
+            Thread.sleep(10)
         }
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
