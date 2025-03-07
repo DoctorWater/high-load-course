@@ -6,11 +6,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
-import ru.quipy.common.utils.FixedWindowRateLimiter
-import ru.quipy.common.utils.NonBlockingOngoingWindow
-import ru.quipy.common.utils.RateLimiter
-import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.*
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
@@ -37,20 +33,29 @@ class PaymentExternalSystemAdapterImpl(
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
-    private val fixedRateLimiter = FixedWindowRateLimiter(rateLimitPerSec, 1, TimeUnit.MILLISECONDS)
     private val parallelRequests = properties.parallelRequests
-    private val nonBlockingOngoingWindow = NonBlockingOngoingWindow(parallelRequests)
+
+    private val rateLimiter = FixedWindowRateLimiter(rateLimitPerSec, 1, TimeUnit.SECONDS)
+    //    private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
+//    private val rateLimiter = TokenBucketRateLimiter(rateLimitPerSec, rateLimitPerSec + 2, 1, TimeUnit.SECONDS)
+//    private val rateLimiter = LeakingBucketRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1), rateLimitPerSec)
+    private val window = NonBlockingOngoingWindow(parallelRequests)
 
     private val client = OkHttpClient.Builder().build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+
+        // Ограничиваем количество запросов к сервису
+        rateLimiter.tickBlocking()
+
+        // Ограничиваем количество одновременных запросов
+        window.putIntoWindow()
+
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
         logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
 
-        fixedRateLimiter.tickBlocking()
-        nonBlockingOngoingWindow.putIntoWindow()
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         paymentESService.update(paymentId) {
@@ -98,7 +103,7 @@ class PaymentExternalSystemAdapterImpl(
             }
         }
         finally {
-            nonBlockingOngoingWindow.releaseWindow()
+            window.releaseWindow()
         }
     }
 
